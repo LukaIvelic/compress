@@ -243,4 +243,24 @@ function Invoke-EncodeAttempt {
     }
 }
 
-Export-ModuleMember -Function Get-AudioBitrateKbps, Invoke-EncodeAttempt, Require-FfmpegEncoder
+function Invoke-LosslessCopy {
+    param(
+        [string] $InputPath,
+        [string] $OutputPath,
+        [double] $DurationSeconds
+    )
+
+    $copyArgs = @(
+        "-hide_banner", "-y", "-nostdin", "-loglevel", "error", "-nostats",
+        "-progress", "pipe:1",
+        "-i", $InputPath,
+        "-map", "0",
+        "-c", "copy",
+        "-movflags", "+faststart",
+        $OutputPath
+    )
+
+    Invoke-FfmpegWithProgress $copyArgs $DurationSeconds 1 1
+}
+
+Export-ModuleMember -Function Get-AudioBitrateKbps, Invoke-EncodeAttempt, Invoke-LosslessCopy, Require-FfmpegEncoder

@@ -136,23 +136,14 @@ function Invoke-CompressVideo {
     }
 
     if (-not $bestGoodPath) {
-        $bestGoodPath = $bestEffortPath
-    }
-
-    if ((-not $bestGoodPath) -and ($EncoderMode -eq "nvenc")) {
-        $fallbackPath = Join-Path $directory ("$baseName-compressed.fallback.mp4")
-        Remove-Item -LiteralPath $fallbackPath -Force -ErrorAction SilentlyContinue
-
-        $fallbackAudioKbps = if ($hasAudio) { 32 } else { 0 }
-        Invoke-EncodeAttempt $inputFullPath $fallbackPath $minimumVideoKbps $fallbackAudioKbps $hasAudio $duration $EncoderMode
-
-        $fallbackSize = (Get-Item -LiteralPath $fallbackPath).Length
-        if ($fallbackSize -le $targetBytes) {
-            $bestGoodPath = $fallbackPath
-            $bestGoodSize = $fallbackSize
-        } else {
-            Remove-Item -LiteralPath $fallbackPath -Force -ErrorAction SilentlyContinue
+        if ($bestEffortPath -and (Test-Path -LiteralPath $bestEffortPath)) {
+            Remove-Item -LiteralPath $bestEffortPath -Force -ErrorAction SilentlyContinue
         }
+
+        $losslessPath = Join-Path $directory ("$baseName-compressed.lossless.mp4")
+        Remove-Item -LiteralPath $losslessPath -Force -ErrorAction SilentlyContinue
+        Invoke-LosslessCopy $inputFullPath $losslessPath $duration
+        $bestGoodPath = $losslessPath
     }
 
     if (-not $bestGoodPath) {
