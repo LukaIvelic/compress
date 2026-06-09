@@ -1,6 +1,9 @@
 # Internal implementation for compress.bat.
 [CmdletBinding()]
 param(
+    [Alias("d")]
+    [switch] $Directory,
+
     [Parameter(Mandatory = $true, Position = 0)]
     [string] $Path,
 
@@ -11,35 +14,25 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-try {
-    $moduleRoot = Join-Path $PSScriptRoot "modules"
-    Import-Module (Join-Path $moduleRoot "Common\Compress.Common.psm1") -Force -DisableNameChecking
-    Import-Module (Join-Path $moduleRoot "Progress\Compress.Progress.psm1") -Force -DisableNameChecking
-    Import-Module (Join-Path $moduleRoot "Probe\Compress.Probe.psm1") -Force -DisableNameChecking
-    Import-Module (Join-Path $moduleRoot "Encoding\Compress.Encoding.psm1") -Force -DisableNameChecking
-    Import-Module (Join-Path $moduleRoot "FileSystem\Compress.FileSystem.psm1") -Force -DisableNameChecking
+function Invoke-CompressVideo {
+    param(
+        [System.IO.FileInfo] $InputItem,
+        [double] $TargetMB
+    )
 
-    Require-Command "ffmpeg"
-    Require-Command "ffprobe"
-
-    $inputItem = Get-Item -LiteralPath $Path
-    if ($inputItem.PSIsContainer) {
-        throw "Input path is a directory, expected a video file."
-    }
-
-    $targetBytes = [long] [Math]::Floor($MaxMB * 1MB)
+    $targetBytes = [long] [Math]::Floor($TargetMB * 1MB)
     $closeEnoughBytes = [long] [Math]::Floor($targetBytes * 0.985)
-    $inputFullPath = $inputItem.FullName
-    $directory = $inputItem.DirectoryName
-    $baseName = [System.IO.Path]::GetFileNameWithoutExtension($inputItem.Name)
+    $inputFullPath = $InputItem.FullName
+    $directory = $InputItem.DirectoryName
+    $baseName = [System.IO.Path]::GetFileNameWithoutExtension($InputItem.Name)
     $outputPath = Join-Path $directory "$baseName-compressed.mp4"
 
-    if ($inputItem.Length -le $targetBytes) {
+    if ($InputItem.Length -le $targetBytes) {
         Copy-Item -LiteralPath $inputFullPath -Destination $outputPath -Force
         Write-CompressProgressBar 100
         Write-Host
         Write-Host "Compressed into $([System.IO.Path]::GetFileName($outputPath))"
-        exit 0
+        return
     }
 
     $duration = Get-VideoDurationSeconds $inputFullPath
@@ -136,6 +129,54 @@ try {
     Write-CompressProgressBar 100
     Write-Host
     Write-Host "Compressed into $([System.IO.Path]::GetFileName($outputPath))"
+}
+
+function Get-DirectoryVideos {
+    param([System.IO.DirectoryInfo] $InputDirectory)
+
+    return Get-ChildItem -LiteralPath $InputDirectory.FullName -Filter "*.mp4" -File |
+        Where-Object {
+            ($_.BaseName -notlike "*-compressed") -and
+            ($_.Name -notlike "*-compressed.attempt-*.mp4")
+        } |
+        Sort-Object Name
+}
+
+try {
+    $moduleRoot = Join-Path $PSScriptRoot "modules"
+    Import-Module (Join-Path $moduleRoot "Common\Compress.Common.psm1") -Force -DisableNameChecking
+    Import-Module (Join-Path $moduleRoot "Progress\Compress.Progress.psm1") -Force -DisableNameChecking
+    Import-Module (Join-Path $moduleRoot "Probe\Compress.Probe.psm1") -Force -DisableNameChecking
+    Import-Module (Join-Path $moduleRoot "Encoding\Compress.Encoding.psm1") -Force -DisableNameChecking
+    Import-Module (Join-Path $moduleRoot "FileSystem\Compress.FileSystem.psm1") -Force -DisableNameChecking
+
+    Require-Command "ffmpeg"
+    Require-Command "ffprobe"
+
+    $inputItem = Get-Item -LiteralPath $Path
+
+    if ($Directory) {
+        if (-not $inputItem.PSIsContainer) {
+            throw "Directory mode expects a directory path."
+        }
+
+        $videoItems = @(Get-DirectoryVideos $inputItem)
+        if ($videoItems.Count -eq 0) {
+            throw "No .mp4 files found in directory."
+        }
+
+        foreach ($videoItem in $videoItems) {
+            Invoke-CompressVideo $videoItem $MaxMB
+        }
+
+        exit 0
+    }
+
+    if ($inputItem.PSIsContainer) {
+        throw "Input path is a directory. Use compress -d <dir-path> to compress a directory."
+    }
+
+    Invoke-CompressVideo $inputItem $MaxMB
     exit 0
 } catch {
     Write-Error $_.Exception.Message
