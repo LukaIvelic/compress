@@ -4,6 +4,9 @@ param(
     [Alias("d")]
     [switch] $Directory,
 
+    [Alias("n")]
+    [switch] $Nvidia,
+
     [Parameter(Mandatory = $true, Position = 0)]
     [string] $Path,
 
@@ -17,7 +20,8 @@ $ErrorActionPreference = "Stop"
 function Invoke-CompressVideo {
     param(
         [System.IO.FileInfo] $InputItem,
-        [double] $TargetMB
+        [double] $TargetMB,
+        [string] $EncoderMode
     )
 
     $targetBytes = [long] [Math]::Floor($TargetMB * 1MB)
@@ -56,7 +60,7 @@ function Invoke-CompressVideo {
         $candidatePath = Join-Path $directory ("$baseName-compressed.attempt-$attempt.mp4")
         Remove-Item -LiteralPath $candidatePath -Force -ErrorAction SilentlyContinue
 
-        Invoke-EncodeAttempt $inputFullPath $candidatePath $videoKbps $audioKbps $hasAudio $duration
+        Invoke-EncodeAttempt $inputFullPath $candidatePath $videoKbps $audioKbps $hasAudio $duration $EncoderMode
 
         $candidateSize = (Get-Item -LiteralPath $candidatePath).Length
 
@@ -153,6 +157,11 @@ try {
     Require-Command "ffmpeg"
     Require-Command "ffprobe"
 
+    $encoderMode = if ($Nvidia) { "nvenc" } else { "x264" }
+    if ($encoderMode -eq "nvenc") {
+        Require-FfmpegEncoder "h264_nvenc"
+    }
+
     $inputItem = Get-Item -LiteralPath $Path
 
     if ($Directory) {
@@ -166,7 +175,7 @@ try {
         }
 
         foreach ($videoItem in $videoItems) {
-            Invoke-CompressVideo $videoItem $MaxMB
+            Invoke-CompressVideo $videoItem $MaxMB $encoderMode
         }
 
         exit 0
@@ -176,7 +185,7 @@ try {
         throw "Input path is a directory. Use compress -d <dir-path> to compress a directory."
     }
 
-    Invoke-CompressVideo $inputItem $MaxMB
+    Invoke-CompressVideo $inputItem $MaxMB $encoderMode
     exit 0
 } catch {
     Write-Error $_.Exception.Message
