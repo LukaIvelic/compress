@@ -51,11 +51,12 @@ function Invoke-CompressVideo {
     $audioKbps = Get-AudioBitrateKbps $hasAudio $totalKbps
     $minimumVideoKbps = if ($EncoderMode -eq "nvenc") { 16 } else { 32 }
     $videoKbps = [Math]::Max($minimumVideoKbps, $totalKbps - $audioKbps)
-    $maxAttempts = if ($EncoderMode -eq "nvenc") { 10 } else { 6 }
+    $maxAttempts = 5
     $lowGoodKbps = $null
     $highBadKbps = $null
     $bestGoodPath = $null
     $bestGoodSize = 0L
+    $bestEffortPath = $null
 
     for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
         $candidatePath = Join-Path $directory ("$baseName-compressed.attempt-$attempt.mp4")
@@ -97,7 +98,11 @@ function Invoke-CompressVideo {
             continue
         }
 
-        Remove-Item -LiteralPath $candidatePath -Force
+        if ($bestEffortPath -and (Test-Path -LiteralPath $bestEffortPath)) {
+            Remove-Item -LiteralPath $bestEffortPath -Force -ErrorAction SilentlyContinue
+        }
+        $bestEffortPath = $candidatePath
+
         $highBadKbps = $videoKbps
 
         if ($null -ne $lowGoodKbps) {
@@ -130,6 +135,10 @@ function Invoke-CompressVideo {
         $videoKbps = $nextKbps
     }
 
+    if (-not $bestGoodPath) {
+        $bestGoodPath = $bestEffortPath
+    }
+
     if ((-not $bestGoodPath) -and ($EncoderMode -eq "nvenc")) {
         $fallbackPath = Join-Path $directory ("$baseName-compressed.fallback.mp4")
         Remove-Item -LiteralPath $fallbackPath -Force -ErrorAction SilentlyContinue
@@ -147,7 +156,7 @@ function Invoke-CompressVideo {
     }
 
     if (-not $bestGoodPath) {
-        throw "Could not compress below $(Format-Size $targetBytes) within $maxAttempts attempts."
+        throw "Could not create a compressed output within $maxAttempts attempts."
     }
 
     Move-WithRetry $bestGoodPath $outputPath

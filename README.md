@@ -13,6 +13,8 @@ compress -n -d "C:\path\folder"
 
 Add `C:\dev\compress` to PATH. Output is written next to the source as `<name>-compressed.mp4`.
 
+The 8 MB target is enforced for up to five attempts. If the file still cannot fit, the fifth attempt is kept as the best-effort compressed output.
+
 Directory mode compresses every `.mp4` in the folder non-recursively and skips files already named `*-compressed.mp4`.
 
 Use `-n` to encode with NVIDIA NVENC (`h264_nvenc`) instead of CPU `libx264`.
