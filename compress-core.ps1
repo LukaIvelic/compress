@@ -25,7 +25,8 @@ function Invoke-CompressVideo {
     )
 
     $targetBytes = [long] [Math]::Floor($TargetMB * 1MB)
-    $closeEnoughBytes = [long] [Math]::Floor($targetBytes * 0.985)
+    $closeEnoughFactor = if ($EncoderMode -eq "nvenc") { 0.94 } else { 0.985 }
+    $closeEnoughBytes = [long] [Math]::Floor($targetBytes * $closeEnoughFactor)
     $inputFullPath = $InputItem.FullName
     $directory = $InputItem.DirectoryName
     $baseName = [System.IO.Path]::GetFileNameWithoutExtension($InputItem.Name)
@@ -48,9 +49,9 @@ function Invoke-CompressVideo {
     $initialBudgetBytes = [long] [Math]::Floor($targetBytes * 0.992)
     $totalKbps = [int] [Math]::Floor(($initialBudgetBytes * 8 / $duration) / 1000)
     $audioKbps = Get-AudioBitrateKbps $hasAudio $totalKbps
-    $minimumVideoKbps = 32
+    $minimumVideoKbps = if ($EncoderMode -eq "nvenc") { 16 } else { 32 }
     $videoKbps = [Math]::Max($minimumVideoKbps, $totalKbps - $audioKbps)
-    $maxAttempts = 6
+    $maxAttempts = if ($EncoderMode -eq "nvenc") { 10 } else { 6 }
     $lowGoodKbps = $null
     $highBadKbps = $null
     $bestGoodPath = $null
@@ -102,12 +103,20 @@ function Invoke-CompressVideo {
         if ($null -ne $lowGoodKbps) {
             $nextKbps = [int] [Math]::Floor(($lowGoodKbps + $highBadKbps) / 2)
         } else {
-            $ratio = $targetBytes / [double] $candidateSize
-            $nextKbps = [int] [Math]::Floor($videoKbps * $ratio * 0.985)
+            $audioBytes = if ($hasAudio) { ($audioKbps * 1000 / 8) * $duration } else { 0 }
+            $containerReserveBytes = [Math]::Max(128KB, $targetBytes * 0.02)
+            $observedVideoBytes = [Math]::Max(1, $candidateSize - $audioBytes)
+            $allowedVideoBytes = [Math]::Max(1, ($targetBytes * 0.985) - $audioBytes - $containerReserveBytes)
+            $safety = if ($EncoderMode -eq "nvenc") { 0.97 } else { 0.985 }
+            $nextKbps = [int] [Math]::Floor($videoKbps * ($allowedVideoBytes / [double] $observedVideoBytes) * $safety)
         }
 
         if ($nextKbps -ge $videoKbps) {
-            $nextKbps = $videoKbps - 16
+            $nextKbps = if ($EncoderMode -eq "nvenc") {
+                [int] [Math]::Floor($videoKbps * 0.75)
+            } else {
+                $videoKbps - 16
+            }
         }
 
         if ($nextKbps -lt $minimumVideoKbps) {
@@ -119,6 +128,22 @@ function Invoke-CompressVideo {
         }
 
         $videoKbps = $nextKbps
+    }
+
+    if ((-not $bestGoodPath) -and ($EncoderMode -eq "nvenc")) {
+        $fallbackPath = Join-Path $directory ("$baseName-compressed.fallback.mp4")
+        Remove-Item -LiteralPath $fallbackPath -Force -ErrorAction SilentlyContinue
+
+        $fallbackAudioKbps = if ($hasAudio) { 32 } else { 0 }
+        Invoke-EncodeAttempt $inputFullPath $fallbackPath $minimumVideoKbps $fallbackAudioKbps $hasAudio $duration $EncoderMode
+
+        $fallbackSize = (Get-Item -LiteralPath $fallbackPath).Length
+        if ($fallbackSize -le $targetBytes) {
+            $bestGoodPath = $fallbackPath
+            $bestGoodSize = $fallbackSize
+        } else {
+            Remove-Item -LiteralPath $fallbackPath -Force -ErrorAction SilentlyContinue
+        }
     }
 
     if (-not $bestGoodPath) {
@@ -188,6 +213,7 @@ try {
     Invoke-CompressVideo $inputItem $MaxMB $encoderMode
     exit 0
 } catch {
+    Write-Host
     Write-Error $_.Exception.Message
     exit 1
 }
