@@ -39,29 +39,56 @@ function Invoke-FfmpegWithProgress {
         Write-CompressProgressBar $basePercent
     }
 
-    & ffmpeg @Arguments 2>&1 | ForEach-Object {
-        $line = $_.ToString()
+    $stderrPath = Join-Path ([System.IO.Path]::GetTempPath()) ("compress-ffmpeg-" + [System.Guid]::NewGuid().ToString("N") + ".err")
 
-        if ($line -match "^([^=]+)=(.*)$") {
-            $progress[$Matches[1]] = $Matches[2]
+    $exitCode = $null
+    $previousErrorActionPreference = $ErrorActionPreference
 
-            $seconds = Get-ProgressSeconds $progress
-            if ($DurationSeconds -gt 0) {
-                $passPercent = [int] [Math]::Floor(($seconds / $DurationSeconds) * 100)
-                if ($passPercent -gt 100) { $passPercent = 100 }
+    try {
+        $ErrorActionPreference = "Continue"
 
-                $percent = $basePercent + [int] [Math]::Floor($passPercent / 2)
-                if ($percent -gt $lastPercent) {
-                    Write-CompressProgressBar $percent
-                    $lastPercent = $percent
+        & ffmpeg @Arguments 2> $stderrPath | ForEach-Object {
+            $line = $_.ToString()
+
+            if ($line -match "^([^=]+)=(.*)$") {
+                $progress[$Matches[1]] = $Matches[2]
+
+                $seconds = Get-ProgressSeconds $progress
+                if ($DurationSeconds -gt 0) {
+                    $passPercent = [int] [Math]::Floor(($seconds / $DurationSeconds) * 100)
+                    if ($passPercent -gt 100) { $passPercent = 100 }
+
+                    $percent = $basePercent + [int] [Math]::Floor($passPercent / 2)
+                    if ($percent -gt $lastPercent) {
+                        Write-CompressProgressBar $percent
+                        $lastPercent = $percent
+                    }
+                }
+            } elseif (-not [string]::IsNullOrWhiteSpace($line)) {
+                $errorLines.Add($line)
+            }
+        }
+
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+
+        if (Test-Path -LiteralPath $stderrPath) {
+            $stderrLines = Get-Content -LiteralPath $stderrPath -ErrorAction SilentlyContinue
+            foreach ($line in $stderrLines) {
+                if (-not [string]::IsNullOrWhiteSpace($line)) {
+                    $errorLines.Add($line)
                 }
             }
-        } elseif (-not [string]::IsNullOrWhiteSpace($line)) {
-            $errorLines.Add($line)
+
+            Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
         }
     }
 
-    $exitCode = $LASTEXITCODE
+    if ($null -eq $exitCode) {
+        $exitCode = 1
+    }
+
     $finalPercent = $basePercent + 50
     if (($Pass -lt 2) -and ($finalPercent -gt $lastPercent)) {
         Write-CompressProgressBar $finalPercent
